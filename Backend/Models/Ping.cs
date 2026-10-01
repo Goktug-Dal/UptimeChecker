@@ -1,11 +1,11 @@
 namespace Backend.Api.Models;
 
-public class Pings{
+public class Ping{
     public long Id {get; set;}
 
 
     public int MonitorId {get; set;}
-    public Servers? Server{get; set;}
+    public Server? Server{get; set;}
 
 
     public int StatusCode {get; set;}
