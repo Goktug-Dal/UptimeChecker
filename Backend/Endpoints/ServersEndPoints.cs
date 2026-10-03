@@ -30,7 +30,28 @@ public static class ServersEndPoints
                     )).ToList()
                     )).ToListAsync());
 
+        //get this server with id last 50 ping
+        app.MapGet("/servers/{id:int}/pings", async (int id, AppDbContext dbContext) =>{
+            var Ping = await dbContext.Servers.AnyAsync(s => s.Id == id); // for conversion
 
-        
+            if (!Ping){
+                return Results.NotFound(new { error = $"Server with {id} does not exist or could not be found"});
+            }
+
+            var pings = await dbContext.Pings.AsNoTracking()
+            .Where(p => p.ServerId == id)
+            .OrderByDescending(p => p.CheckedAt)
+            .Take(50)
+            .Select(p => new PingResult(
+                p.Id,
+                p.StatusCode,
+                p.ResponseTimeMs,
+                p.IsSuccess,
+                p.ErrMessage,
+                p.CheckedAt
+            )).ToListAsync();
+
+            return Results.Ok(pings);
+        });
     }
 }
