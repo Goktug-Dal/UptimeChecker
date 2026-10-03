@@ -12,5 +12,7 @@ public class Ping{
     public int ResponseTimeMs{get; set;} // go + get back
     public bool IsSuccess{get; set;}
     public string? ErrMessage{get; set;}
+
+    
     public DateTime CheckedAt{get; set;} = DateTime.UtcNow;
 }
