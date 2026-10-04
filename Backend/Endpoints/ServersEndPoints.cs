@@ -4,6 +4,7 @@ using Backend.Api.Context;
 using Microsoft.EntityFrameworkCore;
 
 using Backend.Api.Dtos;
+using Backend.Api.Models;
 
 public static class ServersEndPoints
 {
@@ -52,6 +53,45 @@ public static class ServersEndPoints
             )).ToListAsync();
 
             return Results.Ok(pings);
+        });
+
+
+
+
+
+
+        //Post a server
+        app.MapPost("/servers", async (CreateServerDto newServer, AppDbContext dbContext) =>{
+            if(string.IsNullOrWhiteSpace(newServer.Url)
+            || !Uri.TryCreate(newServer.Url, UriKind.Absolute, out var uriResult)
+            ||(uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps)){
+                return Results.BadRequest(new {error = "A valid HTTP or HTTPS required"});
+            }            
+            
+            var server = new Server
+            {
+                Url = newServer.Url.Trim(),
+                Name = string.IsNullOrWhiteSpace(newServer.Name) ? uriResult.Host: newServer.Name.Trim(),
+                IntervalSeconds = newServer.IntervalSeconds is > 0 ? newServer.IntervalSeconds.Value : 60,
+                IsActive = true,
+                IsUp = true,
+                NextCheckTime = DateTime.UtcNow
+            };
+
+            dbContext.Servers.Add(server);
+            await dbContext.SaveChangesAsync();
+
+            return Results.Created($"/servers/{server.Id}",
+            new ServerResult(
+                server.Id,
+                server.Url,
+                server.Name,
+                server.IntervalSeconds,
+                server.IsActive,
+                server.IsUp,
+                server.LastResponseTimeMs,
+                new List<PingResult>()
+            ));
         });
     }
 }
