@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 
 using Backend.Api.Dtos;
 using Backend.Api.Models;
+using Backend.Api.Services;
 
 public static class ServersEndPoints
 {
@@ -92,6 +93,97 @@ public static class ServersEndPoints
                 server.LastResponseTimeMs,
                 new List<PingResult>()
             ));
+        });
+
+
+        //Delete a server
+        app.MapDelete("/servers/{id:int}", async (int id, AppDbContext dbContext) =>
+        {
+            var server = await dbContext.Servers.FindAsync(id);
+
+            if(server is null)
+            {
+                return Results.NotFound(new { error = $"Server with ID {id} not found."});
+            }
+
+            dbContext.Servers.Remove(server);
+            await dbContext.SaveChangesAsync();
+
+            return Results.NoContent();
+        });
+
+
+        //Post a ping to a specific server
+        app.MapPost("/servers/{id:int}/ping", async (int id, AppDbContext dbContext, IPingerService pinger)=>
+        {
+            var server = await dbContext.Servers.FindAsync(id);
+            if(server is null)
+            {
+                return Results.NotFound(new { error = $"Server with ID {id} not found."});
+            }
+
+            //call a ping
+            var res = await pinger.PingAsync(server.Url); // with this url
+
+            var ping = new Ping
+            {
+                ServerId = server.Id,
+                StatusCode = res.StatusCode,
+                ResponseTimeMs = res.ResponseTimeMs,
+                IsSuccess = res.IsSuccess,
+                ErrMessage = res.ErrMessage,
+                CheckedAt = DateTime.UtcNow
+            };
+
+            dbContext.Pings.Add(ping); // add to ping db
+
+            server.IsUp = res.IsSuccess;
+            server.LastResponseTimeMs = res.ResponseTimeMs;
+            server.NextCheckTime = DateTime.UtcNow.AddSeconds(server.IntervalSeconds);
+
+            await dbContext.SaveChangesAsync();
+
+            return Results.Ok(new PingResult(
+                ping.Id,
+                ping.StatusCode,
+                ping.ResponseTimeMs,
+                ping.IsSuccess,
+                ping.ErrMessage,
+                ping.CheckedAt
+            ));
+        });
+
+
+        //Update a server
+        app.MapPut("/servers/{id:int}", async (int id, UpdateServerDto dto,AppDbContext dbContext) =>
+        {
+            if (string.IsNullOrWhiteSpace(dto.Url) || 
+                !Uri.TryCreate(dto.Url, UriKind.Absolute, out var uriResult) ||
+                (uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps))
+            {
+                return Results.BadRequest(new { error = "A valid HTTP or HTTPS URL is required." });
+            }
+
+            var server = await dbContext.Servers.FindAsync(id);
+            if (server is null)
+            {
+                return Results.NotFound(new { error = $"Server with ID {id} not found." });
+            }
+
+            server.Url = dto.Url.Trim();
+            server.Name = string.IsNullOrWhiteSpace(dto.Name) ? uriResult.Host : dto.Name.Trim();
+            server.IntervalSeconds = dto.IntervalSeconds > 0 ? dto.IntervalSeconds : 60;
+            server.IsActive = dto.IsActive;
+
+
+            if(server.IsActive && server.NextCheckTime > DateTime.UtcNow)
+            {
+                server.NextCheckTime = DateTime.UtcNow;
+            }
+
+            await dbContext.SaveChangesAsync();
+
+            return Results.NoContent();
         });
     }
 }

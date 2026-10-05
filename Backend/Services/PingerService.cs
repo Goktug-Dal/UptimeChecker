@@ -1,10 +1,11 @@
 using System.Diagnostics;
 using System.Net.Http;
+using Backend.Api.Dtos;
 
 namespace Backend.Api.Services;
 
 public interface IPingerService{
-    Task<PingResult> PingAsync(string url, CancellationToken cancellationToken = default);
+    Task<ProbeResult> PingAsync(string url, CancellationToken cancellationToken = default);
 }
 
 public class PingerService : IPingerService
@@ -15,7 +16,7 @@ public class PingerService : IPingerService
     {
         httpFact = httpFactory;
     }
-    public async Task<PingResult> PingAsync(string url, CancellationToken cancellationToken = default)
+    public async Task<ProbeResult> PingAsync(string url, CancellationToken cancellationToken = default)
     {
         var client = httpFact.CreateClient("Pinger");
         var timer = Stopwatch.StartNew();   
@@ -31,7 +32,7 @@ public class PingerService : IPingerService
 
             timer.Stop();
 
-            return new PingResult(
+            return new ProbeResult(
                 StatusCode: (int) response.StatusCode,
                 ResponseTimeMs: (int) timer.ElapsedMilliseconds,
                 IsSuccess: response.IsSuccessStatusCode,
@@ -40,7 +41,7 @@ public class PingerService : IPingerService
         }
         catch(TaskCanceledException){
             timer.Stop();
-            return new PingResult(
+            return new ProbeResult(
                 StatusCode: 0,
                 ResponseTimeMs: (int) timer.ElapsedMilliseconds,
                 IsSuccess: false,
@@ -49,7 +50,7 @@ public class PingerService : IPingerService
         }
         catch(Exception e){
             timer.Stop();
-            return new PingResult(
+            return new ProbeResult(
                 StatusCode: 0,
                 ResponseTimeMs: (int) timer.ElapsedMilliseconds,
                 IsSuccess: false,
