@@ -1,26 +1,49 @@
+using Backend.Api.Context;
+using Backend.Api.Hubs;
 using Backend.Api.Services;
 using Microsoft.EntityFrameworkCore;
-using Backend.Api.Context;
+
+
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddSignalR();
 
-builder.Services.AddHttpClient("PingerClient", client =>{
-    client.Timeout = TimeSpan.FromSeconds(5);
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("UptimeChecker");
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("ReactApp", policy =>
+    {
+        policy.WithOrigins("http://localhost:5173")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials(); // Essential for SignalR WebSockets
+    });
 });
 
-builder.Services.AddScoped<IPingerService, PingerService>();
+
+
+builder.Services.AddHttpClient("Pinger", client =>{
+    client.Timeout = TimeSpan.FromSeconds(5);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("UptimeChecker/1.0");
+});
+
+builder.Services.AddSingleton<IPingerService, PingerService>();
 
 //database
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 builder.Services.AddHostedService<CheckerService>();
+
+
+
+
 var app = builder.Build();
+
+app.UseCors("ReactApp");
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -29,6 +52,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseCors("ReactApp");
+
+app.MapServerEndPoints();
+app.MapHub<ServerStatusHub>("/hubs/server-status");
 
 app.Run();
 

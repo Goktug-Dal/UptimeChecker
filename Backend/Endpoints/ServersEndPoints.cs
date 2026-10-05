@@ -9,7 +9,7 @@ using Backend.Api.Services;
 
 public static class ServersEndPoints
 {
-    public static void MapGameEndPoints(this WebApplication app){
+    public static void MapServerEndPoints(this WebApplication app){
         //Get All Servers
         app.MapGet("/servers", async (AppDbContext dbContext) => await
             dbContext.Servers.AsNoTracking().Select(server =>   
