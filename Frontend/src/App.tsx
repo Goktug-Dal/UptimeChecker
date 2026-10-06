@@ -1,19 +1,20 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import type { Server, ServerStatusUpdatedEvent } from './types/monitor';
 import { fetchServers, createServer, deleteServer, triggerManualPing } from './services/api';
 import { useSignalR } from './hooks/useSignalR';
 import { ServerCard } from './components/ServerCard';
-import { PlusCircle, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 
 export default function App() {
   const [servers, setServers] = useState<Server[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Form State
+  // Form state
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
-  const [interval, setInterval] = useState(10);
-  const [isAdding, setIsAdding] = useState(false);
+  const [intervalSec, setIntervalSec] = useState(10);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // 1. Initial hydration
   const loadData = async () => {
@@ -54,15 +55,27 @@ export default function App() {
   // 3. Actions
   const handleAddServer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!url) return;
+    const trimmed = url.trim();
+    if (!trimmed) return;
+
+    // be forgiving: "github.com" -> "https://github.com"
+    const normalizedUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+    setIsSubmitting(true);
+    setFormError(null);
     try {
-      const newServer = await createServer({ name, url, intervalSeconds: Number(interval) });
+      const newServer = await createServer({
+        name: name.trim(),
+        url: normalizedUrl,
+        intervalSeconds: Number(intervalSec),
+      });
       setServers((prev) => [...prev, { ...newServer, pingLogs: [] }]);
       setName('');
       setUrl('');
-      setIsAdding(false);
     } catch {
-      alert('Error creating server');
+      setFormError("We couldn't add that target. Check the URL and try again.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -72,135 +85,148 @@ export default function App() {
     setServers((prev) => prev.filter((s) => s.id !== id));
   };
 
+  // 4. Derived totals
+  const totals = useMemo(() => {
+    const up = servers.filter((s) => s.isUp).length;
+    const down = servers.length - up;
+    const avg = servers.length
+      ? Math.round(servers.reduce((sum, s) => sum + (s.lastResponseTimeMs || 0), 0) / servers.length)
+      : 0;
+    return { up, down, avg };
+  }, [servers]);
+
+  const allGood = servers.length > 0 && totals.down === 0;
+
   return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <div style={styles.logoRow}>
-          <Activity size={28} color="#38bdf8" />
-          <h1 style={styles.appTitle}>UptimePulse</h1>
+    <div className="page">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand__mark">
+            <Activity size={16} strokeWidth={2.5} />
+          </span>
+          UptimePulse
         </div>
-        <button style={styles.addBtn} onClick={() => setIsAdding(!isAdding)}>
-          <PlusCircle size={18} /> Add Target
-        </button>
+        <span className="live">
+          <i />
+          Live updates
+        </span>
       </header>
 
-      {isAdding && (
-        <form onSubmit={handleAddServer} style={styles.formCard}>
-          <h3 style={{ margin: '0 0 1rem 0' }}>Add New Server Target</h3>
-          <div style={styles.formRow}>
-            <input
-              placeholder="Display Name (e.g. GitHub)"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              style={styles.input}
-            />
-            <input
-              placeholder="URL (e.g. https://github.com)"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-              style={styles.input}
-            />
-            <input
-              type="number"
-              min="5"
-              value={interval}
-              onChange={(e) => setInterval(Number(e.target.value))}
-              placeholder="Interval (sec)"
-              style={{ ...styles.input, width: '120px' }}
-            />
-            <button type="submit" style={styles.submitBtn}>
-              Start Monitoring
-            </button>
+      <div className="layout">
+        {/* Left: the "order summary" */}
+        <section className="panel" aria-labelledby="monitors-title">
+          <div className="panel__head">
+            <h1 className="panel__title" id="monitors-title">
+              Monitors
+            </h1>
+            <p className="panel__sub">
+              {servers.length === 0
+                ? 'Nothing is being watched yet.'
+                : `${servers.length} ${servers.length === 1 ? 'target' : 'targets'}, refreshed in real time.`}
+            </p>
           </div>
-        </form>
-      )}
 
-      {isLoading ? (
-        <p style={{ color: '#94a3b8' }}>Loading telemetry...</p>
-      ) : (
-        <div style={styles.grid}>
-          {servers.map((s) => (
-            <ServerCard key={s.id} server={s} onDelete={handleDelete} onPing={triggerManualPing} />
-          ))}
-          {servers.length === 0 && (
-            <p style={{ color: '#94a3b8' }}>No servers monitored yet. Add one above!</p>
+          {isLoading ? (
+            <div className="list">
+              <div className="skeleton-row" />
+              <div className="skeleton-row" />
+              <div className="skeleton-row" />
+            </div>
+          ) : servers.length === 0 ? (
+            <div className="empty">
+              <h2>No monitors yet</h2>
+              <p>Add your first target on the right and checks start immediately.</p>
+            </div>
+          ) : (
+            <ul className="list">
+              {servers.map((s) => (
+                <ServerCard key={s.id} server={s} onDelete={handleDelete} onPing={triggerManualPing} />
+              ))}
+            </ul>
           )}
-        </div>
-      )}
+
+          <dl className="totals">
+            <div className="totals__row">
+              <dt>Operational</dt>
+              <dd>{totals.up}</dd>
+            </div>
+            <div className="totals__row">
+              <dt>Failing</dt>
+              <dd className={totals.down > 0 ? 'bad' : ''}>{totals.down}</dd>
+            </div>
+            <div className="totals__row">
+              <dt>Average latency</dt>
+              <dd>{totals.avg} ms</dd>
+            </div>
+            <div className="totals__row totals__row--final">
+              <dt>Overall status</dt>
+              <dd>{servers.length === 0 ? '—' : allGood ? 'All systems normal' : 'Attention needed'}</dd>
+            </div>
+          </dl>
+        </section>
+
+        {/* Right: the "payment form" */}
+        <aside className="panel panel--form">
+          <form onSubmit={handleAddServer} noValidate={false}>
+            <h2 className="form__title">Add a target</h2>
+            <p className="form__sub">We'll start checking it right away.</p>
+
+            <div className="field">
+              <label htmlFor="f-name">
+                Display name<span className="field__optional">optional</span>
+              </label>
+              <div className="input">
+                <input
+                  id="f-name"
+                  placeholder="GitHub"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="f-url">URL</label>
+              <div className="input">
+                <input
+                  id="f-url"
+                  placeholder="github.com"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  required
+                  autoComplete="off"
+                  inputMode="url"
+                />
+              </div>
+              <span className="field__hint">We'll add https:// if you leave it out.</span>
+            </div>
+
+            <div className="field">
+              <label htmlFor="f-int">Check every</label>
+              <div className="input">
+                <input
+                  id="f-int"
+                  type="number"
+                  min={5}
+                  value={intervalSec}
+                  onChange={(e) => setIntervalSec(Number(e.target.value))}
+                />
+                <span className="input__affix">seconds</span>
+              </div>
+              <span className="field__hint">Minimum 5 seconds.</span>
+            </div>
+
+            {formError && <div className="form__error">{formError}</div>}
+
+            <button type="submit" className="pay-btn" disabled={isSubmitting || !url.trim()}>
+              {isSubmitting ? 'Adding…' : 'Start monitoring'}
+            </button>
+
+            <p className="form__fine">You can ping or remove a target at any time.</p>
+          </form>
+        </aside>
+      </div>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    maxWidth: '1100px',
-    margin: '0 auto',
-    padding: '2rem 1rem',
-    fontFamily: 'Inter, system-ui, sans-serif',
-    color: '#f8fafc',
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '2rem',
-  },
-  logoRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.75rem',
-  },
-  appTitle: {
-    fontSize: '1.5rem',
-    fontWeight: 700,
-    margin: 0,
-  },
-  addBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-    backgroundColor: '#0284c7',
-    color: '#fff',
-    border: 'none',
-    padding: '0.6rem 1.2rem',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontWeight: 600,
-  },
-  formCard: {
-    backgroundColor: '#1e293b',
-    border: '1px solid #334155',
-    padding: '1.25rem',
-    borderRadius: '8px',
-    marginBottom: '2rem',
-  },
-  formRow: {
-    display: 'flex',
-    gap: '0.75rem',
-    flexWrap: 'wrap',
-  },
-  input: {
-    flex: 1,
-    minWidth: '200px',
-    padding: '0.6rem',
-    backgroundColor: '#0f172a',
-    border: '1px solid #334155',
-    borderRadius: '6px',
-    color: '#fff',
-  },
-  submitBtn: {
-    backgroundColor: '#10b981',
-    color: '#fff',
-    border: 'none',
-    padding: '0.6rem 1.2rem',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontWeight: 600,
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-    gap: '1.25rem',
-  },
-};

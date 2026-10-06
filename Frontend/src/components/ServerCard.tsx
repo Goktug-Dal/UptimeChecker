@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Server } from '../types/monitor';
-import { Play, Trash2 } from 'lucide-react';
+import { Play, Trash2, Loader2 } from 'lucide-react';
 
 interface Props {
   server: Server;
@@ -8,8 +8,51 @@ interface Props {
   onPing: (id: number) => Promise<void>;
 }
 
+const SLOTS = 10;
+
+function timeAgo(iso?: string, now: number = Date.now()): string {
+  if (!iso) return 'not checked yet';
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+const Thumb: React.FC<{ host: string; label: string }> = ({ host, label }) => {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="thumb" aria-hidden="true">
+      {failed ? (
+        label.charAt(0).toUpperCase()
+      ) : (
+        <img
+          src={`https://www.google.com/s2/favicons?domain=${host}&sz=64`}
+          alt=""
+          onError={() => setFailed(true)}
+        />
+      )}
+    </div>
+  );
+};
+
 export const ServerCard: React.FC<Props> = ({ server, onDelete, onPing }) => {
   const [isPinging, setIsPinging] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
 
   const handleManualPing = async () => {
     setIsPinging(true);
@@ -20,166 +63,91 @@ export const ServerCard: React.FC<Props> = ({ server, onDelete, onPing }) => {
     }
   };
 
+  const host = hostOf(server.url);
+  const label = server.name || host;
+
+  // pingLogs arrive newest-first; draw oldest -> newest
+  const recent = (server.pingLogs || []).slice(0, SLOTS);
+  const chrono = [...recent].reverse();
+  const emptySlots = SLOTS - chrono.length;
+  const maxMs = Math.max(100, ...recent.map((p) => p.responseTimeMs));
+
+  const successes = recent.filter((p) => p.isSuccess).length;
+  const uptime = recent.length ? Math.round((successes / recent.length) * 100) : null;
+
+  const latest = recent[0];
+  const lastChecked = latest?.checkedAt ?? server.lastCheckedAt;
+  const lastError = !server.isUp && latest?.errMessage ? latest.errMessage : null;
+
   return (
-    <div style={styles.card}>
-      <div style={styles.header}>
-        <div>
-          <div style={styles.titleRow}>
-            <span
-              style={{
-                ...styles.indicator,
-                backgroundColor: server.isUp ? '#22c55e' : '#ef4444',
-              }}
-            />
-            <h3 style={styles.name}>{server.name || server.url}</h3>
-          </div>
-          <a href={server.url} target="_blank" rel="noreferrer" style={styles.url}>
-            {server.url}
+    <li className="row">
+      <Thumb host={host} label={label} />
+
+      <div style={{ minWidth: 0 }}>
+        <div className="row__name">{label}</div>
+        <div className="row__meta">
+          <a href={server.url} target="_blank" rel="noreferrer">
+            {host}
           </a>
+          <span className="dot" />
+          <span>every {server.intervalSeconds}s</span>
+          <span className="dot" />
+          <span>{uptime === null ? 'no data yet' : `${uptime}% uptime`}</span>
+          <span className="dot" />
+          <span>{timeAgo(lastChecked, now)}</span>
         </div>
-
-        <div style={styles.actions}>
-          <button
-            onClick={handleManualPing}
-            disabled={isPinging}
-            style={styles.iconBtn}
-            title="Manual Ping"
-          >
-            <Play size={16} />
-          </button>
-          <button
-            onClick={() => onDelete(server.id)}
-            style={{ ...styles.iconBtn, color: '#ef4444' }}
-            title="Delete Target"
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
+        {lastError && <div className="row__error">{lastError}</div>}
       </div>
 
-      <div style={styles.metrics}>
-        <div style={styles.metricItem}>
-          <span style={styles.metricLabel}>Status</span>
-          <span style={{ ...styles.metricValue, color: server.isUp ? '#22c55e' : '#ef4444' }}>
-            {server.isUp ? 'Operational' : 'Failing'}
-          </span>
-        </div>
-        <div style={styles.metricItem}>
-          <span style={styles.metricLabel}>Latency</span>
-          <span style={styles.metricValue}>{server.lastResponseTimeMs} ms</span>
-        </div>
-        <div style={styles.metricItem}>
-          <span style={styles.metricLabel}>Interval</span>
-          <span style={styles.metricValue}>{server.intervalSeconds}s</span>
-        </div>
-      </div>
-
-      <div style={styles.pingsSection}>
-        <span style={styles.metricLabel}>Recent Latency (Last 10 checks)</span>
-        <div style={styles.barsContainer}>
-          {(server.pingLogs || []).slice(0, 10).map((ping) => (
+      <div className="spark" aria-label="Recent latency">
+        {Array.from({ length: emptySlots }).map((_, i) => (
+          <div key={`e-${i}`} className="spark__bar spark__bar--empty" />
+        ))}
+        {chrono.map((ping, i) => {
+          const h = Math.max(12, Math.min(100, (ping.responseTimeMs / maxMs) * 100));
+          const isNewest = i === chrono.length - 1;
+          return (
             <div
               key={ping.id}
-              title={`Status: ${ping.statusCode} | ${ping.responseTimeMs}ms | ${new Date(ping.checkedAt).toLocaleTimeString()}`}
-              style={{
-                ...styles.bar,
-                backgroundColor: ping.isSuccess ? '#22c55e' : '#ef4444',
-                height: `${Math.min(Math.max((ping.responseTimeMs / 500) * 24, 6), 24)}px`,
-              }}
+              title={`${ping.statusCode} · ${ping.responseTimeMs}ms · ${new Date(
+                ping.checkedAt
+              ).toLocaleTimeString()}`}
+              className={`spark__bar ${ping.isSuccess ? '' : 'spark__bar--fail'} ${
+                isNewest ? 'spark__bar--new' : ''
+              }`}
+              style={{ ['--h' as string]: `${h}%` }}
             />
-          ))}
-          {(!server.pingLogs || server.pingLogs.length === 0) && (
-            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Waiting for first ping...</span>
-          )}
-        </div>
+          );
+        })}
       </div>
-    </div>
-  );
-};
 
-const styles: Record<string, React.CSSProperties> = {
-  card: {
-    backgroundColor: '#1e293b',
-    borderRadius: '10px',
-    padding: '1.25rem',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '1rem',
-    border: '1px solid #334155',
-    color: '#f8fafc',
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  titleRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-  },
-  indicator: {
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-    display: 'inline-block',
-  },
-  name: {
-    fontSize: '1.1rem',
-    fontWeight: 600,
-    margin: 0,
-  },
-  url: {
-    color: '#94a3b8',
-    fontSize: '0.85rem',
-    textDecoration: 'none',
-  },
-  actions: {
-    display: 'flex',
-    gap: '0.25rem',
-  },
-  iconBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#94a3b8',
-    cursor: 'pointer',
-    padding: '6px',
-    borderRadius: '6px',
-  },
-  metrics: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
-    backgroundColor: '#0f172a',
-    borderRadius: '6px',
-    padding: '0.75rem',
-  },
-  metricItem: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  metricLabel: {
-    fontSize: '0.75rem',
-    color: '#94a3b8',
-    marginBottom: '2px',
-  },
-  metricValue: {
-    fontSize: '0.95rem',
-    fontWeight: 600,
-  },
-  pingsSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.4rem',
-  },
-  barsContainer: {
-    display: 'flex',
-    alignItems: 'flex-end',
-    gap: '4px',
-    height: '24px',
-  },
-  bar: {
-    width: '12px',
-    borderRadius: '2px',
-    cursor: 'pointer',
-  },
+      <div className="row__stat">
+        <div className="row__latency">{server.lastResponseTimeMs} ms</div>
+        <span className={`badge ${server.isUp ? '' : 'badge--down'}`}>
+          <i />
+          {server.isUp ? 'Operational' : 'Failing'}
+        </span>
+      </div>
+
+      <div className="row__actions">
+        <button
+          className="icon-btn"
+          onClick={handleManualPing}
+          disabled={isPinging}
+          title="Ping now"
+          aria-label={`Ping ${label} now`}
+        >
+          {isPinging ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
+        </button>
+        <button
+          className="icon-btn icon-btn--danger"
+          onClick={() => onDelete(server.id)}
+          title="Delete target"
+          aria-label={`Delete ${label}`}
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
+    </li>
+  );
 };
