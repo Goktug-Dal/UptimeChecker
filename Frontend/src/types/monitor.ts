@@ -1,4 +1,3 @@
-//basically models for react to use
 export interface PingResult {
   id: number;
   statusCode: number;
@@ -8,7 +7,7 @@ export interface PingResult {
   checkedAt: string;
 }
 
-export interface ServerResult {
+export interface Server {
   id: number;
   url: string;
   name: string;
@@ -16,12 +15,19 @@ export interface ServerResult {
   isActive: boolean;
   isUp: boolean;
   lastResponseTimeMs: number;
-  recentPings: PingResult[];
+  lastCheckedAt?: string;
+  pingLogs: PingResult[];
 }
 
-export interface ServerStatusUpdateEvent {
+export interface ServerStatusUpdatedEvent {
   serverId: number;
   isUp: boolean;
   lastResponseTimeMs: number;
   ping: PingResult;
+}
+
+export interface CreateServerDto {
+  name: string;
+  url: string;
+  intervalSeconds: number;
 }

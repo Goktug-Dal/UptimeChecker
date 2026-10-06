@@ -4,3 +4,15 @@ GET {{Backend_HostAddress}}/weatherforecast/
 Accept: application/json
 
 ###
+GET http://localhost:5119/servers
+Accept: application/json
+###
+
+POST http://localhost:5119/servers
+Content-Type: application/json
+
+{
+  "name": "YouTube",
+  "url": "https://www.youtube.com",
+  "intervalSeconds": 10
+}

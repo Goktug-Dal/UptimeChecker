@@ -1,36 +1,33 @@
 import { useEffect, useRef } from 'react';
 import * as signalR from '@microsoft/signalr';
-import type { ServerStatusUpdateEvent } from '../types/monitor';
+import type { ServerStatusUpdatedEvent } from '../types/monitor';
 
-const HUB_URL = 'http://localhost:5000/hubs/server-status'; // CHANGE ON PRODUCTION WITH REAL DB LINK
+const HUB_URL = 'http://localhost:5119/hubs/server-status';
 
-export const useSignalR = (onStatusUpdate: (update: ServerStatusUpdateEvent) => void) => {
-  const connectionRef = useRef<signalR.HubConnection | null>(null);
+export const useSignalR = (onStatusUpdate: (event: ServerStatusUpdatedEvent) => void) => {
+  const handlerRef = useRef(onStatusUpdate);
+  handlerRef.current = onStatusUpdate;
 
   useEffect(() => {
     const connection = new signalR.HubConnectionBuilder()
       .withUrl(HUB_URL, {
         withCredentials: true,
       })
-      .withAutomaticReconnect()
-      .configureLogging(signalR.LogLevel.Information)
+      .withAutomaticReconnect([0, 2000, 5000, 10000])
+      .configureLogging(signalR.LogLevel.Warning)
       .build();
 
-    connection.on('ServerStatusUpdated', (data: ServerStatusUpdateEvent) => {
-      onStatusUpdate(data);
+    connection.on('ServerStatusUpdated', (data: ServerStatusUpdatedEvent) => {
+      handlerRef.current(data);
     });
 
     connection
       .start()
-      .then(() => console.log('Connected to SignalR Hub'))
-      .catch((err) => console.error('SignalR Connection Error: ', err));
-
-    connectionRef.current = connection;
+      .then(() => console.log('[SignalR] Connected to hub'))
+      .catch((err) => console.error('[SignalR] Connection error:', err));
 
     return () => {
       connection.stop();
     };
-  }, [onStatusUpdate]);
-
-  return connectionRef.current;
+  }, []);
 };

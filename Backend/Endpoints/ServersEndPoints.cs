@@ -7,6 +7,9 @@ using Backend.Api.Dtos;
 using Backend.Api.Models;
 using Backend.Api.Services;
 
+using Microsoft.AspNetCore.SignalR;
+using Backend.Api.Hubs;
+
 public static class ServersEndPoints
 {
     public static void MapServerEndPoints(this WebApplication app){
@@ -114,7 +117,7 @@ public static class ServersEndPoints
 
 
         //Post a ping to a specific server
-        app.MapPost("/servers/{id:int}/ping", async (int id, AppDbContext dbContext, IPingerService pinger)=>
+        app.MapPost("/servers/{id:int}/ping", async (int id, AppDbContext dbContext, IPingerService pinger, IHubContext<ServerStatusHub> hubContext)=>
         {
             var server = await dbContext.Servers.FindAsync(id);
             if(server is null)
@@ -143,14 +146,24 @@ public static class ServersEndPoints
 
             await dbContext.SaveChangesAsync();
 
-            return Results.Ok(new PingResult(
+            var pingResult = new PingResult(
                 ping.Id,
                 ping.StatusCode,
                 ping.ResponseTimeMs,
                 ping.IsSuccess,
                 ping.ErrMessage,
                 ping.CheckedAt
-            ));
+            );
+
+            await hubContext.Clients.All.SendAsync("ServerStatusUpdated", new
+            {
+                serverId = server.Id,
+                isUp = server.IsUp,
+                lastResponseTimeMs = server.LastResponseTimeMs,
+                ping = pingResult
+            });
+
+            return Results.Ok(pingResult);
         });
 
 
