@@ -27,7 +27,15 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddHttpClient("Pinger", client =>{
     client.Timeout = TimeSpan.FromSeconds(5);
+    client.DefaultRequestVersion = System.Net.HttpVersion.Version20;
+    client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
     client.DefaultRequestHeaders.UserAgent.ParseAdd("UptimeChecker/1.0");
+}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    AllowAutoRedirect = false,
+    PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+    PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),  
+    EnableMultipleHttp2Connections = true
 });
 
 builder.Services.AddSingleton<IPingerService, PingerService>();

@@ -30,13 +30,36 @@ public class PingerService : IPingerService
                 cancellationToken
             );
 
+            if(response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+            {
+                using var getRequest = new HttpRequestMessage(HttpMethod.Get, url);
+                using var getResponse = await client.SendAsync(
+                    getRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken
+                );
+
+                timer.Stop();
+                int getCode = (int)getResponse.StatusCode;
+                bool isGetSuccess = getCode >= 200 && getCode < 400;
+
+                return new ProbeResult(
+                    StatusCode: getCode,
+                    ResponseTimeMs: (int)timer.ElapsedMilliseconds,
+                    IsSuccess: isGetSuccess,
+                    ErrMessage: isGetSuccess? null: $"HTTP {getCode} {getResponse.ReasonPhrase}"
+                );
+            }
+
             timer.Stop();
+            int statusCode = (int)response.StatusCode;
+            bool isSuccess = statusCode >= 200 && statusCode < 400;
 
             return new ProbeResult(
-                StatusCode: (int) response.StatusCode,
+                StatusCode: statusCode,
                 ResponseTimeMs: (int) timer.ElapsedMilliseconds,
-                IsSuccess: response.IsSuccessStatusCode,
-                ErrMessage: null
+                IsSuccess: isSuccess,
+                ErrMessage: isSuccess ? null : $"HTTP {statusCode} {response.ReasonPhrase}"
             );
         }
         catch(TaskCanceledException){
