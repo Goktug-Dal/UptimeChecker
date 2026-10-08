@@ -11,6 +11,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
   protected override void OnModelCreating(ModelBuilder modelBuilder)
   {
     base.OnModelCreating(modelBuilder);
-    modelBuilder.Entity<Server>().HasIndex(s => new {s.IsActive, s.NextCheckTime});
+    modelBuilder.Entity<Server>().HasMany(s => s.PingLogs).WithOne(p => p.Server).HasForeignKey(p => p.ServerId).OnDelete(DeleteBehavior.Cascade);
   }
 }

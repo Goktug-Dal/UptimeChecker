@@ -15,6 +15,7 @@ export interface Server {
   isActive: boolean;
   isUp: boolean;
   lastResponseTimeMs: number;
+  isDefault?: boolean;
   lastCheckedAt?: string;
   pingLogs: PingResult[];
 }

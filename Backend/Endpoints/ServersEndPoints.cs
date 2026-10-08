@@ -9,13 +9,15 @@ using Backend.Api.Services;
 
 using Microsoft.AspNetCore.SignalR;
 using Backend.Api.Hubs;
+using Microsoft.AspNetCore.Mvc;
 
 public static class ServersEndPoints
 {
     public static void MapServerEndPoints(this WebApplication app){
         //Get All Servers
-        app.MapGet("/servers", async (AppDbContext dbContext) => await
-            dbContext.Servers.AsNoTracking().Select(server =>   
+        app.MapGet("/servers", async ([FromQuery]string? sessionId, AppDbContext dbContext) => {
+            var query = dbContext.Servers.AsNoTracking().Where(s => s.IsDefault|| (sessionId != null && s.SessionId == sessionId));
+            return await query.Select(server => 
                 new ServerResult(
                     server.Id,
                     server.Url,
@@ -33,7 +35,8 @@ public static class ServersEndPoints
                         p.ErrMessage!,
                         p.CheckedAt
                     )).ToList()
-                    )).ToListAsync());
+                    )).ToListAsync();
+                });
 
         //get this server with id last 50 ping
         app.MapGet("/servers/{id:int}/pings", async (int id, AppDbContext dbContext) =>{
@@ -65,20 +68,64 @@ public static class ServersEndPoints
 
 
         //Post a server
-        app.MapPost("/servers", async (CreateServerDto newServer, AppDbContext dbContext) =>{
-            if(string.IsNullOrWhiteSpace(newServer.Url)
-            || !Uri.TryCreate(newServer.Url, UriKind.Absolute, out var uriResult)
-            ||(uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps)){
-                return Results.BadRequest(new {error = "A valid HTTP or HTTPS required"});
-            }            
+        app.MapPost("/servers", async ([FromBody]CreateServerDto newServer,[FromQuery] string? sessionId, AppDbContext dbContext) =>{
+            if (string.IsNullOrWhiteSpace(sessionId))
+            {
+                return Results.BadRequest(new { error = "Session identifier is required." });
+            }
+
+            var totalServers = await dbContext.Servers.CountAsync();
+            if(totalServers >= 20)
+            {
+                return Results.BadRequest(new { error = "Global limit reached (20 monitors max). Try again later." });
+            }
+
+
+            // max 5 at a time
+            var sessionCount = await dbContext.Servers.CountAsync(s => s.SessionId == sessionId);
+            if(sessionCount >= 5)
+            {
+                return Results.BadRequest(new { error = "Sandbox limit reached. Max 5 custom targets per session." });
+            }
+
+            if (newServer == null || string.IsNullOrWhiteSpace(newServer.Url))
+            {
+                return Results.BadRequest(new { error = "Target URL is required." });
+            }   
+            var rawUrl = newServer.Url.Trim();
+            if (!rawUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !rawUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                rawUrl = "https://" + rawUrl;
+            }
+
+            if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uriResult) ||
+            (uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps))
+            {
+                return Results.BadRequest(new { error = "A valid HTTP or HTTPS URL is required." });
+            }
+
+            //anti abuse
+            if(uriResult.IsLoopback || uriResult.Host.Equals("localhost",StringComparison.OrdinalIgnoreCase) ||
+                uriResult.Host.StartsWith("192.168.") || uriResult.Host.StartsWith("10.") ||
+                uriResult.Host.StartsWith("172.16.")
+            )
+            {
+                return Results.BadRequest(new { error = "Monitoring local or internal addresses is disabled." });
+            }
+
+            int userInterval = newServer.IntervalSeconds.HasValue && newServer.IntervalSeconds.Value > 0 ? newServer.IntervalSeconds.Value: 10;
+
             
             var server = new Server
             {
-                Url = newServer.Url.Trim(),
+                Url = rawUrl,
                 Name = string.IsNullOrWhiteSpace(newServer.Name) ? uriResult.Host: newServer.Name.Trim(),
-                IntervalSeconds = newServer.IntervalSeconds is > 0 ? newServer.IntervalSeconds.Value : 60,
+                IntervalSeconds = Math.Clamp(userInterval, 5, 300),
                 IsActive = true,
                 IsUp = true,
+                IsDefault = false,
+                SessionId = sessionId,
                 NextCheckTime = DateTime.UtcNow
             };
 
@@ -96,17 +143,27 @@ public static class ServersEndPoints
                 server.LastResponseTimeMs,
                 new List<PingResult>()
             ));
-        });
+        }).RequireRateLimiting("StrictIpLimit");    
 
 
         //Delete a server
-        app.MapDelete("/servers/{id:int}", async (int id, AppDbContext dbContext) =>
+        app.MapDelete("/servers/{id:int}", async (int id, string? sessionId,AppDbContext dbContext) =>
         {
             var server = await dbContext.Servers.FindAsync(id);
 
             if(server is null)
             {
                 return Results.NotFound(new { error = $"Server with ID {id} not found."});
+            }
+
+            if (server.IsDefault)
+            {
+                return Results.BadRequest(new { error = "Core demo monitors cannot be deleted." });
+            }
+
+            if(server.SessionId != sessionId)
+            {
+                return Results.Forbid();
             }
 
             dbContext.Servers.Remove(server);
@@ -164,11 +221,11 @@ public static class ServersEndPoints
             });
 
             return Results.Ok(pingResult);
-        });
+        }).RequireRateLimiting("StrictIpLimit");
 
 
         //Update a server
-        app.MapPut("/servers/{id:int}", async (int id, UpdateServerDto dto,AppDbContext dbContext) =>
+        app.MapPut("/servers/{id:int}", async (int id, string? sessionId,UpdateServerDto dto,AppDbContext dbContext) =>
         {
             if (string.IsNullOrWhiteSpace(dto.Url) || 
                 !Uri.TryCreate(dto.Url, UriKind.Absolute, out var uriResult) ||
@@ -183,9 +240,20 @@ public static class ServersEndPoints
                 return Results.NotFound(new { error = $"Server with ID {id} not found." });
             }
 
+            if (server.IsDefault)
+            {
+                return Results.BadRequest(new { error = "Core demo monitors cannot be modified." });
+            }
+
+            if(server.SessionId != sessionId)
+            {
+                return Results.Forbid();
+            }
+
+
             server.Url = dto.Url.Trim();
             server.Name = string.IsNullOrWhiteSpace(dto.Name) ? uriResult.Host : dto.Name.Trim();
-            server.IntervalSeconds = dto.IntervalSeconds > 0 ? dto.IntervalSeconds : 60;
+            server.IntervalSeconds = dto.IntervalSeconds;
             server.IsActive = dto.IsActive;
 
 
@@ -197,6 +265,20 @@ public static class ServersEndPoints
             await dbContext.SaveChangesAsync();
 
             return Results.NoContent();
+        });
+
+
+
+        app.MapPost("/sessions/{sessionId}/cleanup", async (string sessionId, AppDbContext dbContext) =>
+        {
+            var targets = await dbContext.Servers.Where(s => s.SessionId == sessionId && !s.IsDefault).ToListAsync();
+
+            if (targets.Any())
+            {
+                dbContext.Servers.RemoveRange(targets);
+                await dbContext.SaveChangesAsync();
+            }
+            return Results.Ok();
         });
     }
 }

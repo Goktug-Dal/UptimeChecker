@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 using Microsoft.AspNetCore.SignalR;
 using Backend.Api.Hubs;
+using Microsoft.OpenApi;
 
 public class CheckerService : BackgroundService
 {
@@ -30,21 +31,25 @@ public class CheckerService : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             try {
-                using (var scope = _scopeFactory.CreateScope())
-                {
+                    using var scope = _scopeFactory.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var pinger = scope.ServiceProvider.GetRequiredService<IPingerService>();
+                    var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<ServerStatusHub>>();
+
                     var now = DateTime.UtcNow;
 
                     var dueServers = await db.Servers.Where(s => s.IsActive && s.NextCheckTime <= now)
                         .ToListAsync(stoppingToken);
 
-                    
-
-                    var completedChecks = new List<(Server server, Ping log)>();
                     foreach (var server in dueServers)
                     {
                         
                         var result = await _pingerService.PingAsync(server.Url, stoppingToken);
+
+                        server.LastCheckedAt = DateTime.UtcNow;
+                        server.NextCheckTime = DateTime.UtcNow.AddSeconds(server.IntervalSeconds);
+                        server.LastResponseTimeMs = result.ResponseTimeMs;
+                        server.IsUp = result.IsSuccess;
 
                         var log = new Ping
                         {
@@ -57,12 +62,10 @@ public class CheckerService : BackgroundService
                         };
 
                         db.Pings.Add(log);
+                        await db.SaveChangesAsync(stoppingToken);
 
-                        server.IsUp = result.IsSuccess;
-                        server.LastResponseTimeMs = result.ResponseTimeMs;
-                        server.NextCheckTime = DateTime.UtcNow.AddSeconds(server.IntervalSeconds);
-
-                        await _hubContext.Clients.All.SendAsync("ServerStatusUpdated", new {ServerId = server.Id,
+                        await _hubContext.Clients.All.SendAsync("ServerStatusUpdated", new {
+                            ServerId = server.Id,
                             IsUp = server.IsUp,
                             LastResponseTimeMs = server.LastResponseTimeMs,
                             Ping = new PingResult(
@@ -72,7 +75,7 @@ public class CheckerService : BackgroundService
                                 log.IsSuccess,
                                 log.ErrMessage,
                                 log.CheckedAt
-                            )}, cancellationToken: stoppingToken);
+                            )},stoppingToken);
 
                         if(DateTime.UtcNow - _lastCleanupTime > TimeSpan.FromHours(24))
                         {
@@ -84,15 +87,12 @@ public class CheckerService : BackgroundService
                         }
                     }
                 }
-
-              
-            }
-            catch(Exception ex)
+            catch(Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                Console.WriteLine($"[CheckerService Error]: {ex.Message}");
+                Console.WriteLine(ex);
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-        }
+            await Task.Delay(1000, stoppingToken);
+    }
     }
 }

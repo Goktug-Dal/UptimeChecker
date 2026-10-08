@@ -1,6 +1,9 @@
+using System.Threading.RateLimiting;
 using Backend.Api.Context;
 using Backend.Api.Hubs;
+using Backend.Api.Models;
 using Backend.Api.Services;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 
@@ -12,14 +15,18 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 builder.Services.AddSignalR();
 
+//database
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("ReactApp", policy =>
     {
         policy.WithOrigins("http://localhost:5173")
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials(); // Essential for SignalR WebSockets
+            .WithMethods("GET", "POST", "DELETE", "PUT")
+            .AllowAnyHeader()
+            .AllowCredentials(); // Essential for SignalR WebSockets
     });
 });
 
@@ -27,9 +34,12 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddHttpClient("Pinger", client =>{
     client.Timeout = TimeSpan.FromSeconds(5);
-    client.DefaultRequestVersion = System.Net.HttpVersion.Version20;
+    client.DefaultRequestVersion = System.Net.HttpVersion.Version11;
     client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("UptimeChecker/1.0");
+    //need these 3 for general linking
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    client.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+    client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
 {
     AllowAutoRedirect = false,
@@ -40,18 +50,50 @@ builder.Services.AddHttpClient("Pinger", client =>{
 
 builder.Services.AddSingleton<IPingerService, PingerService>();
 
-//database
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
 
 builder.Services.AddHostedService<CheckerService>();
+builder.Services.AddHostedService<CleanerService>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("StrictIpLimit", httpContext =>
+    {
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions{
+            PermitLimit = 15,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+    });
+    });
+});
+
+builder.Services.Configure<HostOptions>(opts =>
+{
+    opts.ShutdownTimeout = TimeSpan.FromSeconds(3); // 30 -> 3sec
+});
 
 
 
 
 var app = builder.Build();
 
-app.UseCors("ReactApp");
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
+
+    if(!db.Servers.Any(s => s.IsDefault))
+    {
+        db.Servers.AddRange(
+            new Server {Name = "Cloudflare", Url = "https://cloudflare.com", IntervalSeconds = 10, IsDefault = true, IsUp = true},
+            new Server {Name = "Linkedin", Url = "https://linkedin.com", IntervalSeconds = 10, IsDefault = true, IsUp = true},
+            new Server {Name = "Github", Url = "https://github.com", IntervalSeconds = 10, IsDefault = true, IsUp = true}
+        );
+        db.SaveChanges();
+    }
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -61,9 +103,10 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("ReactApp");
+app.UseRateLimiter();
 
-app.MapServerEndPoints();
-app.MapHub<ServerStatusHub>("/hubs/server-status");
+app.MapServerEndPoints();//endpoints
+app.MapHub<ServerStatusHub>("/hubs/server-status"); //signalr
 
 app.Run();
 

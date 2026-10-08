@@ -13,11 +13,13 @@ public class Server{
 
     public bool IsUp{get; set;} = true;
     public int LastResponseTimeMs {get; set;}
-
-    
     public DateTime? LastCheckedAt{get; set;}
 
+
+    public bool IsDefault{get; set;} = false;
+    public string? SessionId {get; set;}
+    public DateTime CreatedAt {get; set;} = DateTime.UtcNow;
+
+
     public List<Ping> PingLogs{get; set;} = new();
-
-
 }

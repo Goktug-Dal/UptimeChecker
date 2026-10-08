@@ -30,7 +30,7 @@ public class PingerService : IPingerService
                 cancellationToken
             );
 
-            if(response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+            if(response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed || response.StatusCode == System.Net.HttpStatusCode.NotImplemented || response.StatusCode == System.Net.HttpStatusCode.BadRequest)
             {
                 using var getRequest = new HttpRequestMessage(HttpMethod.Get, url);
                 using var getResponse = await client.SendAsync(

@@ -16,6 +16,7 @@ interface Props {
   server: Server;
   onDelete: (id: number) => void;
   onPing: (id: number) => Promise<void>;
+  onUpdateInterval?: (id: number, newInterval: number) => Promise<void>;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
   onDragOver?: (e: React.DragEvent) => void;
@@ -51,6 +52,15 @@ function timeAgo(iso?: string, now: number = Date.now()): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   return `${Math.floor(m / 60)}h ago`;
+}
+
+function ensureAbsoluteUrl(rawUrl: string): string {
+  if (!rawUrl) return '#';
+  const trimmed = rawUrl.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
 }
 
 function hostOf(url: string): string {
@@ -131,6 +141,7 @@ export const ServerCard: React.FC<Props> = ({
   server,
   onDelete,
   onPing,
+  onUpdateInterval,
   draggable = false,
   onDragStart,
   onDragOver,
@@ -140,12 +151,24 @@ export const ServerCard: React.FC<Props> = ({
 }) => {
   const [isPinging, setIsPinging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [isUpdatingInterval, setIsUpdatingInterval] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
+
+  const handleIntervalChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = Number(e.target.value);
+    if (!onUpdateInterval || val === server.intervalSeconds) return;
+    setIsUpdatingInterval(true);
+    try {
+      await onUpdateInterval(server.id, val);
+    } finally {
+      setIsUpdatingInterval(false);
+    }
+  };
 
   const handleManualPing = async () => {
     setIsPinging(true);
@@ -186,11 +209,8 @@ export const ServerCard: React.FC<Props> = ({
       className={`dd-card ${server.isUp ? 'dd-card--ok' : 'dd-card--down'} ${
         isDragging ? 'dd-card--dragging' : ''
       }`}
-      draggable={draggable}
-      onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      onDragEnd={onDragEnd}
     >
       {/* Top Header of Card with Clean Drag Handle */}
       <div className="dd-card__header">
@@ -199,6 +219,9 @@ export const ServerCard: React.FC<Props> = ({
             className="dd-card__drag-handle"
             title="Drag to reorder monitor"
             aria-label="Drag to reorder monitor"
+            draggable={draggable}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
           >
             <DragHandleIcon />
           </div>
@@ -208,11 +231,11 @@ export const ServerCard: React.FC<Props> = ({
             <div className="dd-card__title-row">
               <h3 className="dd-card__name" title={label}>{label}</h3>
               <a
-                href={server.url}
+                href={ensureAbsoluteUrl(server.url)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="dd-card__outlink"
-                title={`Visit ${server.url}`}
+                title={`Visit ${ensureAbsoluteUrl(server.url)}`}
               >
                 <ArrowUpRight size={13} />
               </a>
@@ -283,7 +306,7 @@ export const ServerCard: React.FC<Props> = ({
 
             return (
               <div
-                key={ping.id || i}
+                key={`${server.id}-slot-${i}-${ping.id ?? 'log'}-${ping.checkedAt ?? ''}`}
                 className={`dd-sparkline__bar ${
                   ping.isSuccess ? 'dd-sparkline__bar--ok' : 'dd-sparkline__bar--fail'
                 } ${isNewest ? 'dd-sparkline__bar--newest' : ''}`}
@@ -323,6 +346,27 @@ export const ServerCard: React.FC<Props> = ({
         </div>
 
         <div className="dd-card__actions">
+          {/* Interval Selector */}
+          <div className="dd-interval-badge" title="Check interval">
+            <span className="dd-interval-label">Every:</span>
+            {!(server.isDefault ?? (server as any).IsDefault) && onUpdateInterval ? (
+              <select
+                className="dd-interval-select"
+                value={server.intervalSeconds || 15}
+                onChange={handleIntervalChange}
+                disabled={isUpdatingInterval}
+                title="Change check frequency"
+              >
+                <option value={10}>10s</option>
+                <option value={15}>15s</option>
+                <option value={30}>30s</option>
+                <option value={60}>60s</option>
+              </select>
+            ) : (
+              <span className="dd-interval-static">{server.intervalSeconds || 15}s</span>
+            )}
+          </div>
+
           <button
             type="button"
             className="dd-action-btn dd-action-btn--ping"
@@ -344,14 +388,16 @@ export const ServerCard: React.FC<Props> = ({
             <span>Logs</span>
           </button>
 
-          <button
-            type="button"
-            className="dd-action-btn dd-action-btn--delete"
-            onClick={() => onDelete(server.id)}
-            title="Delete this monitor"
-          >
-            <Trash2 size={13} />
-          </button>
+          {!(server.isDefault ?? (server as any).IsDefault) && (
+            <button
+              type="button"
+              className="dd-action-btn dd-action-btn--delete"
+              onClick={() => onDelete(server.id)}
+              title="Delete this monitor"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -378,7 +424,7 @@ export const ServerCard: React.FC<Props> = ({
                 </thead>
                 <tbody>
                   {recent.map((log, idx) => (
-                    <tr key={log.id || idx}>
+                    <tr key={`${server.id}-row-${idx}-${log.id ?? 'log'}-${log.checkedAt ?? ''}`}>
                       <td>
                         <span className={`log-pill ${log.isSuccess ? 'log-pill--ok' : 'log-pill--fail'}`}>
                           {log.isSuccess ? 'OK' : 'Error'}

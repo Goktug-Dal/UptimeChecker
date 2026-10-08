@@ -18,6 +18,8 @@ import {
   Mail,
 } from 'lucide-react';
 
+const UPTIME_LOGO = '/logo.png';
+
 // Standalone brand SVG icons
 const GithubIcon: React.FC<{ size?: number }> = ({ size = 15 }) => (
   <svg
@@ -67,6 +69,7 @@ export default function App() {
   // Add Target Form state
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
+  const [intervalSec, setIntervalSec] = useState<number>(15);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
@@ -77,7 +80,12 @@ export default function App() {
 
   const loadData = async () => {
     try {
-      const data = await fetchServers();
+      const rawData = await fetchServers();
+      // Ensure only the latest 15 pings are retained in state, even if backend returns 50
+      const data = rawData.map((s) => ({
+        ...s,
+        pingLogs: (s.pingLogs || []).slice(0, 15),
+      }));
       try {
         const savedOrder = localStorage.getItem('uptime_checker_order');
         if (savedOrder) {
@@ -101,15 +109,31 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Set document title and favicon
+    document.title = 'Uptime Checker';
+    let link: HTMLLinkElement | null = document.querySelector("link[rel*='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = UPTIME_LOGO;
+
     loadData();
   }, []);
+
+
 
   const handleStatusUpdate = useCallback((event: ServerStatusUpdatedEvent) => {
     setServers((prevServers) =>
       prevServers.map((s) => {
         if (s.id !== event.serverId) return s;
 
-        const updatedPings = [event.ping, ...(s.pingLogs || [])].slice(0, 15);
+        // Filter out any duplicate ping entry by id or identical timestamp before prepending
+        const existing = (s.pingLogs || []).filter(
+          (p) => (event.ping.id ? p.id !== event.ping.id : true) && p.checkedAt !== event.ping.checkedAt
+        );
+        const updatedPings = [event.ping, ...existing].slice(0, 15);
 
         return {
           ...s,
@@ -138,7 +162,7 @@ export default function App() {
       const newServer = await createServer({
         name: name.trim(),
         url: normalizedUrl,
-        intervalSeconds: 10,
+        intervalSeconds: intervalSec,
       });
       setServers((prev) => {
         const updated = [...prev, { ...newServer, pingLogs: [] }];
@@ -150,6 +174,7 @@ export default function App() {
       });
       setName('');
       setUrl('');
+      setIntervalSec(15);
       setFormSuccess(`Now monitoring ${newServer.name || trimmed}`);
       setTimeout(() => setFormSuccess(null), 3500);
     } catch {
@@ -159,17 +184,59 @@ export default function App() {
     }
   };
 
+  const handleUpdateInterval = async (id: number, newInterval: number) => {
+    const target = servers.find((s) => s.id === id);
+    if (!target) return;
+
+    const sid = sessionStorage.getItem('uptime_session_id');
+    try {
+      const res = await fetch(`http://localhost:5119/servers/${id}?sessionId=${encodeURIComponent(sid || '')}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: target.name,
+          url: target.url,
+          intervalSeconds: newInterval,
+          isActive: true,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to update interval');
+      }
+
+      setServers((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, intervalSeconds: newInterval } : s))
+      );
+    } catch (err: any) {
+      alert(err.message || 'Error updating interval');
+    }
+  };
+
   const handleDelete = async (id: number) => {
-    if (!window.confirm('Delete this monitor?')) return;
-    await deleteServer(id);
-    setServers((prev) => {
-      const updated = prev.filter((s) => s.id !== id);
-      try {
-        const ids = updated.map((s) => s.id);
-        localStorage.setItem('uptime_checker_order', JSON.stringify(ids));
-      } catch {}
-      return updated;
-    });
+    const target = servers.find((s) => s.id === id);
+    const isCore = target && ((target as any).isDefault ?? (target as any).IsDefault);
+    if (isCore) {
+      alert(`"${target?.name || 'This service'}" is a core base monitor and cannot be removed.`);
+      return;
+    }
+
+    if (!window.confirm(`Delete monitor "${target?.name || id}"?`)) return;
+
+    try {
+      await deleteServer(id);
+      setServers((prev) => {
+        const updated = prev.filter((s) => s.id !== id);
+        try {
+          const ids = updated.map((s) => s.id);
+          localStorage.setItem('uptime_checker_order', JSON.stringify(ids));
+        } catch {}
+        return updated;
+      });
+    } catch (err: any) {
+      alert(err.message || 'Core system monitors cannot be deleted.');
+    }
   };
 
   const handlePingAll = async () => {
@@ -261,9 +328,9 @@ export default function App() {
             tabIndex={0}
           >
             <span className="navbar__logo">
-              <Activity size={18} strokeWidth={2.5} />
+              <img src={UPTIME_LOGO} alt="Uptime Checker Logo" className="navbar__logo-img" />
             </span>
-            <span className="navbar__title">UptimeChecker</span>
+            <span className="navbar__title">Uptime Checker</span>
           </div>
 
           <nav className="navbar__actions">
@@ -329,7 +396,7 @@ export default function App() {
                       <Globe size={15} className="input-icon" />
                       <input
                         type="text"
-                        placeholder="URL or domain (e.g. web.whatsapp.com, cloudflare.com)"
+                        placeholder="URL or domain (e.g. cloudflare.com)"
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
                         required
@@ -345,6 +412,21 @@ export default function App() {
                         onChange={(e) => setName(e.target.value)}
                         className="form-input"
                       />
+                    </div>
+
+                    <div className="input-group input-group--interval" title="Check frequency">
+                      <span className="input-prefix">Every:</span>
+                      <select
+                        value={intervalSec}
+                        onChange={(e) => setIntervalSec(Number(e.target.value))}
+                        className="form-select"
+                        aria-label="Probe interval"
+                      >
+                        <option value={10}>10s</option>
+                        <option value={15}>15s</option>
+                        <option value={30}>30s</option>
+                        <option value={60}>60s</option>
+                      </select>
                     </div>
 
                     <button
@@ -372,9 +454,9 @@ export default function App() {
                     <button
                       type="button"
                       className="preset-btn"
-                      onClick={() => applyPreset('WhatsApp Web', 'https://web.whatsapp.com')}
+                      onClick={() => applyPreset('IMDb', 'https://www.imdb.com')}
                     >
-                      + WhatsApp Web
+                      + IMDb
                     </button>
                     <button
                       type="button"
@@ -386,9 +468,9 @@ export default function App() {
                     <button
                       type="button"
                       className="preset-btn"
-                      onClick={() => applyPreset('Cloudflare', 'https://cloudflare.com')}
+                      onClick={() => applyPreset('Amazon', 'https://www.amazon.com')}
                     >
-                      + Cloudflare
+                      + Amazon
                     </button>
                   </div>
 
@@ -493,6 +575,7 @@ export default function App() {
                       server={s}
                       onDelete={handleDelete}
                       onPing={triggerManualPing}
+                      onUpdateInterval={handleUpdateInterval}
                       draggable={!searchQuery.trim()}
                       onDragStart={(e) => handleDragStart(e, idx)}
                       onDragOver={handleDragOver}
@@ -677,7 +760,7 @@ export default function App() {
       <footer className="footer-plate">
         <div className="footer-plate__inner">
           <div className="footer-plate__left">
-            <span className="footer-brand">UptimeChecker</span>
+            <span className="footer-brand">Uptime Checker</span>
             <span className="footer-dot">•</span>
             <span className="footer-credit">
               Made by <strong>Göktuğ Dal</strong>
