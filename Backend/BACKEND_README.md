@@ -2,13 +2,18 @@
 A server that can monitor if other websites are working.
 
 # Links
-GitHub: https://github.com/Goktug-Dal/UptimeChecker
 
-LinkedIn: [Göktuğ Dal](https://www.linkedin.com/in/goktug-dal-48733832b)
+Live: https://uptime-checker-red.vercel.app/
 
-Backend: Coming soon
+Backend: https://uptimechecker-iayx.onrender.com
 
-Live Demo: Coming soon
+GitHub: [UptimeChecker] https://github.com/Goktug-Dal/UptimeChecker
+
+LinkedIn: [Göktuğ Dal] https://www.linkedin.com/in/goktug-dal-48733832b
+
+**Note: Hosted on Render's free tier; the initial cold start may take up to ~45 seconds to spin up.**
+
+
 
 ## 1. Local Setup
 

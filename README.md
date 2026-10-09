@@ -4,10 +4,12 @@ A real time server monitoring sandbox that tracks Uptime of servers.
 
 ## Links
 
-- **GitHub:** [UptimeChecker](https://github.com/Goktug-Dal/UptimeChecker)
-- **LinkedIn:** [Göktuğ Dal](https://www.linkedin.com/in/goktug-dal-48733832b/)
-- **Backend:** Coming soon
-- **Live Demo:** Coming soon
+- **Live:** https://uptime-checker-red.vercel.app/
+- **Backend:** https://uptimechecker-iayx.onrender.com
+- **GitHub:** [UptimeChecker] https://github.com/Goktug-Dal/UptimeChecker
+- **LinkedIn:** [Göktuğ Dal] https://www.linkedin.com/in/goktug-dal-48733832b/
+
+**Note: Hosted on Render's free tier; the initial cold start may take up to ~45 seconds to spin up.**
 
 ## Features
 
