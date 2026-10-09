@@ -1,2 +1,9 @@
-bin/
-obj/
+*.env
+*.env.local
+*.env.*.local
+.DS_Store
+uptime.db
+desktop.ini
+.vs/
+.idea/
+.vscode/
