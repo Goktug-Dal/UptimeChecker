@@ -23,7 +23,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("ReactApp", policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins("http://localhost:5173", "https://uptime-checker-red.vercel.app")
             .WithMethods("GET", "POST", "DELETE", "PUT")
             .AllowAnyHeader()
             .AllowCredentials(); // Essential for SignalR WebSockets
