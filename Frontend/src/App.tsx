@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import type { Server, ServerStatusUpdatedEvent } from './types/monitor';
-import { fetchServers, createServer, deleteServer, triggerManualPing } from './services/api';
+import { fetchServers, createServer, deleteServer, triggerManualPing, updateServer } from './services/api';
 import { useSignalR } from './hooks/useSignalR';
 import { ServerCard } from './components/ServerCard';
 import {
-  //Activity,
+  Activity,
   Plus,
   Info,
   Layers,
@@ -89,15 +89,17 @@ export default function App() {
       try {
         const savedOrder = localStorage.getItem('uptime_checker_order');
         if (savedOrder) {
-          const orderIds: number[] = JSON.parse(savedOrder);
-          data.sort((a, b) => {
-            const idxA = orderIds.indexOf(a.id);
-            const idxB = orderIds.indexOf(b.id);
-            if (idxA === -1 && idxB === -1) return 0;
-            if (idxA === -1) return 1;
-            if (idxB === -1) return -1;
-            return idxA - idxB;
-          });
+          const orderIds = JSON.parse(savedOrder);
+          if (Array.isArray(orderIds)) {
+            data.sort((a, b) => {
+              const idxA = orderIds.indexOf(a.id);
+              const idxB = orderIds.indexOf(b.id);
+              if (idxA === -1 && idxB === -1) return 0;
+              if (idxA === -1) return 1;
+              if (idxB === -1) return -1;
+              return idxA - idxB;
+            });
+          }
         }
       } catch {}
       setServers(data);
@@ -188,23 +190,13 @@ export default function App() {
     const target = servers.find((s) => s.id === id);
     if (!target) return;
 
-    const sid = sessionStorage.getItem('uptime_session_id');
     try {
-      const res = await fetch(`http://localhost:5119/servers/${id}?sessionId=${encodeURIComponent(sid || '')}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: target.name,
-          url: target.url,
-          intervalSeconds: newInterval,
-          isActive: true,
-        }),
+      await updateServer(id, {
+        name: target.name,
+        url: target.url,
+        intervalSeconds: newInterval,
+        isActive: true,
       });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to update interval');
-      }
 
       setServers((prev) =>
         prev.map((s) => (s.id === id ? { ...s, intervalSeconds: newInterval } : s))
@@ -574,7 +566,7 @@ export default function App() {
                       key={s.id}
                       server={s}
                       onDelete={handleDelete}
-                      onPing={triggerManualPing}
+                      onPing={async (id) => { await triggerManualPing(id); }}
                       onUpdateInterval={handleUpdateInterval}
                       draggable={!searchQuery.trim()}
                       onDragStart={(e) => handleDragStart(e, idx)}

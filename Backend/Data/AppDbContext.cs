@@ -12,5 +12,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
   {
     base.OnModelCreating(modelBuilder);
     modelBuilder.Entity<Server>().HasMany(s => s.PingLogs).WithOne(p => p.Server).HasForeignKey(p => p.ServerId).OnDelete(DeleteBehavior.Cascade);
+    modelBuilder.Entity<Ping>().HasIndex(p => new { p.ServerId, p.CheckedAt });
+    modelBuilder.Entity<Ping>().HasIndex(p => p.CheckedAt);
   }
 }

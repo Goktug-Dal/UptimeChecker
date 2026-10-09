@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.SignalR;
 using Backend.Api.Hubs;
 using Microsoft.AspNetCore.Mvc;
 
+using System.Net;
+using System.Net.Sockets;
 public static class ServersEndPoints
 {
     public static void MapServerEndPoints(this WebApplication app){
@@ -26,7 +28,7 @@ public static class ServersEndPoints
                     server.IsActive,
                     server.IsUp,
                     server.LastResponseTimeMs,
-                    server.PingLogs.OrderByDescending(p => p.CheckedAt).Take(10)
+                    server.PingLogs.OrderByDescending(p => p.CheckedAt).Take(20)
                     .Select(p => new PingResult(
                         p.Id,
                         p.StatusCode,
@@ -38,14 +40,19 @@ public static class ServersEndPoints
                     )).ToListAsync();
                 });
 
-        //get this server with id last 50 ping
-        app.MapGet("/servers/{id:int}/pings", async (int id, AppDbContext dbContext) =>{
-            var Ping = await dbContext.Servers.AnyAsync(s => s.Id == id); // for conversion
-
-            if (!Ping){
-                return Results.NotFound(new { error = $"Server with {id} does not exist or could not be found"});
+        //get this server id pings
+        app.MapGet("/servers/{id:int}/pings", async (int id, [FromQuery] string? sessionId,AppDbContext dbContext) =>{
+            var server = await dbContext.Servers.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id);
+            if(server is null)
+            {
+                return Results.NotFound(new { error = $"Server with ID {id} not found." });
             }
 
+            if(!server.IsDefault && server.SessionId != sessionId)
+            {
+                return Results.Forbid();
+            }
+            
             var pings = await dbContext.Pings.AsNoTracking()
             .Where(p => p.ServerId == id)
             .OrderByDescending(p => p.CheckedAt)
@@ -105,14 +112,11 @@ public static class ServersEndPoints
                 return Results.BadRequest(new { error = "A valid HTTP or HTTPS URL is required." });
             }
 
-            //anti abuse
-            if(uriResult.IsLoopback || uriResult.Host.Equals("localhost",StringComparison.OrdinalIgnoreCase) ||
-                uriResult.Host.StartsWith("192.168.") || uriResult.Host.StartsWith("10.") ||
-                uriResult.Host.StartsWith("172.16.")
-            )
+            if(await IsRestrictedHostAsync(uriResult.Host))
             {
-                return Results.BadRequest(new { error = "Monitoring local or internal addresses is disabled." });
+                return Results.BadRequest(new { error = "Monitoring local, internal, or private infrastructure addresses is prohibited." });
             }
+            
 
             int userInterval = newServer.IntervalSeconds.HasValue && newServer.IntervalSeconds.Value > 0 ? newServer.IntervalSeconds.Value: 10;
 
@@ -147,7 +151,7 @@ public static class ServersEndPoints
 
 
         //Delete a server
-        app.MapDelete("/servers/{id:int}", async (int id, string? sessionId,AppDbContext dbContext) =>
+        app.MapDelete("/servers/{id:int}", async (int id, [FromQuery] string? sessionId,AppDbContext dbContext) =>
         {
             var server = await dbContext.Servers.FindAsync(id);
 
@@ -174,12 +178,17 @@ public static class ServersEndPoints
 
 
         //Post a ping to a specific server
-        app.MapPost("/servers/{id:int}/ping", async (int id, AppDbContext dbContext, IPingerService pinger, IHubContext<ServerStatusHub> hubContext)=>
+        app.MapPost("/servers/{id:int}/ping", async (int id,  [FromQuery] string? sessionId,AppDbContext dbContext, IPingerService pinger, IHubContext<ServerStatusHub> hubContext)=>
         {
             var server = await dbContext.Servers.FindAsync(id);
             if(server is null)
             {
                 return Results.NotFound(new { error = $"Server with ID {id} not found."});
+            }
+
+            if(!server.IsDefault && server.SessionId != sessionId)
+            {
+                return Results.Forbid();
             }
 
             //call a ping
@@ -212,26 +221,52 @@ public static class ServersEndPoints
                 ping.CheckedAt
             );
 
-            await hubContext.Clients.All.SendAsync("ServerStatusUpdated", new
-            {
+            var payload = new {
                 serverId = server.Id,
                 isUp = server.IsUp,
                 lastResponseTimeMs = server.LastResponseTimeMs,
                 ping = pingResult
-            });
+            };
+
+            if (server.IsDefault)
+            {
+                await hubContext.Clients.All.SendAsync("ServerStatusUpdated", payload);
+            }
+            else if (!string.IsNullOrWhiteSpace(server.SessionId))
+            {
+                await hubContext.Clients.Group(server.SessionId).SendAsync("ServerStatusUpdated", payload);
+            }
+        
 
             return Results.Ok(pingResult);
         }).RequireRateLimiting("StrictIpLimit");
 
 
         //Update a server
-        app.MapPut("/servers/{id:int}", async (int id, string? sessionId,UpdateServerDto dto,AppDbContext dbContext) =>
+        app.MapPut("/servers/{id:int}", async (int id, [FromQuery]string? sessionId,[FromBody] UpdateServerDto dto,AppDbContext dbContext) =>
         {
             if (string.IsNullOrWhiteSpace(dto.Url) || 
-                !Uri.TryCreate(dto.Url, UriKind.Absolute, out var uriResult) ||
+                dto == null)
+            {
+                return Results.BadRequest(new { error = "A valid URL is required." });
+            }
+
+            var rawUrl = dto.Url.Trim();
+            if (!rawUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !rawUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                rawUrl = "https://" + rawUrl;
+            }
+
+            if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uriResult) ||
                 (uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps))
             {
                 return Results.BadRequest(new { error = "A valid HTTP or HTTPS URL is required." });
+            }
+
+            if (await IsRestrictedHostAsync(uriResult.Host))
+            {
+                return Results.BadRequest(new { error = "Monitoring local, internal, or private infrastructure addresses is prohibited." });
             }
 
             var server = await dbContext.Servers.FindAsync(id);
@@ -251,9 +286,9 @@ public static class ServersEndPoints
             }
 
 
-            server.Url = dto.Url.Trim();
+            server.Url = rawUrl;
             server.Name = string.IsNullOrWhiteSpace(dto.Name) ? uriResult.Host : dto.Name.Trim();
-            server.IntervalSeconds = dto.IntervalSeconds;
+            server.IntervalSeconds = Math.Clamp(dto.IntervalSeconds > 0 ? dto.IntervalSeconds : 10, 5, 300);
             server.IsActive = dto.IsActive;
 
 
@@ -280,5 +315,38 @@ public static class ServersEndPoints
             }
             return Results.Ok();
         });
+    }
+
+    private static async Task<bool> IsRestrictedHostAsync(string host)
+    {
+        if(host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
+
+        try{
+            var address = await Dns.GetHostAddressesAsync(host);
+            foreach(var ip in address)
+            {
+                if(IPAddress.IsLoopback(ip)) return true;
+                if(ip.IsIPv6SiteLocal || ip.IsIPv6LinkLocal) return true;
+
+                var bytes = ip.GetAddressBytes();
+                if(ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    if (bytes[0] == 10) return true;                                       // 10.0.0.0/8
+                    if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return true;  // 172.16.0.0/12
+                    if (bytes[0] == 192 && bytes[1] == 168) return true;                  // 192.168.0.0/16
+                    if (bytes[0] == 169 && bytes[1] == 254) return true;                  // 169.254.0.0/16
+                    if (bytes[0] == 127) return true;                                      // 127.0.0.0/8
+                    if (bytes[0] == 0) return true;
+                }else if(ip.AddressFamily == AddressFamily.InterNetworkV6)
+                {
+                    if (bytes[0] == 0xfc || bytes[0] == 0xfd) return true;
+                }
+            }
+            return false;
+        }catch
+        {
+            return true;
+        }
+
     }
 }

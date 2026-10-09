@@ -9,7 +9,6 @@ using Microsoft.EntityFrameworkCore;
 
 using Microsoft.AspNetCore.SignalR;
 using Backend.Api.Hubs;
-using Microsoft.OpenApi;
 
 public class CheckerService : BackgroundService
 {
@@ -17,32 +16,43 @@ public class CheckerService : BackgroundService
     private readonly IPingerService _pingerService;
 
     private readonly IHubContext<ServerStatusHub> _hubContext;
+    private readonly ILogger<CheckerService> _logger;
 
     private DateTime _lastCleanupTime = DateTime.MinValue;
 
-    public CheckerService(IServiceScopeFactory scopeFactory, IPingerService pingerService, IHubContext<ServerStatusHub> hubContext){
+    public CheckerService(IServiceScopeFactory scopeFactory, IPingerService pingerService, IHubContext<ServerStatusHub> hubContext, ILogger<CheckerService> logger){
         _scopeFactory = scopeFactory;
         _pingerService = pingerService;
         _hubContext = hubContext;
+        _logger = logger;
     }
     
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _logger.LogInformation("Checkerservice started");
         while (!stoppingToken.IsCancellationRequested)
         {
             try {
                     using var scope = _scopeFactory.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                    var pinger = scope.ServiceProvider.GetRequiredService<IPingerService>();
-                    var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<ServerStatusHub>>();
 
+                    if(DateTime.UtcNow - _lastCleanupTime > TimeSpan.FromHours(24))
+                        {
+                        var oneDayLimit = DateTime.UtcNow.AddDays(-1);
+                        var deletedCount = await db.Pings.Where(p => p.CheckedAt < oneDayLimit).ExecuteDeleteAsync(stoppingToken);
+                        if(deletedCount > 0){
+                            _logger.LogInformation("Deleted {Count} pings", deletedCount);
+                        }
+                        _lastCleanupTime = DateTime.UtcNow;
+                        }
                     var now = DateTime.UtcNow;
-
                     var dueServers = await db.Servers.Where(s => s.IsActive && s.NextCheckTime <= now)
                         .ToListAsync(stoppingToken);
+ 
 
                     foreach (var server in dueServers)
-                    {
+                    {   
+                        try{
                         
                         var result = await _pingerService.PingAsync(server.Url, stoppingToken);
 
@@ -64,7 +74,8 @@ public class CheckerService : BackgroundService
                         db.Pings.Add(log);
                         await db.SaveChangesAsync(stoppingToken);
 
-                        await _hubContext.Clients.All.SendAsync("ServerStatusUpdated", new {
+                        var pingPayload = new
+                        {
                             ServerId = server.Id,
                             IsUp = server.IsUp,
                             LastResponseTimeMs = server.LastResponseTimeMs,
@@ -74,22 +85,29 @@ public class CheckerService : BackgroundService
                                 log.ResponseTimeMs,
                                 log.IsSuccess,
                                 log.ErrMessage,
-                                log.CheckedAt
-                            )},stoppingToken);
+                                log.CheckedAt)
+                        };
 
-                        if(DateTime.UtcNow - _lastCleanupTime > TimeSpan.FromHours(24))
+                        if (server.IsDefault)
                         {
-                            var Limit = DateTime.UtcNow.AddDays(-14);
-
-                            await db.Pings.Where(p => p.CheckedAt < Limit).ExecuteDeleteAsync(stoppingToken);
-
-                            _lastCleanupTime = DateTime.UtcNow;
+                            await _hubContext.Clients.All.SendAsync("ServerStatusUpdated", pingPayload, stoppingToken);
+                        }
+                        else if (!string.IsNullOrEmpty(server.SessionId))
+                        {
+                            await _hubContext.Clients.Group(server.SessionId).SendAsync("ServerStatusUpdated", pingPayload, stoppingToken);
                         }
                     }
-                }
+                        catch(Exception ex) when (!stoppingToken.IsCancellationRequested)
+                            {
+                                _logger.LogWarning(ex, "Failed ping cycle for server ID {ServerId} ({Url}). Rescheduling.", server.Id, server.Url);
+                                server.NextCheckTime = DateTime.UtcNow.AddSeconds(Math.Max(server.IntervalSeconds, 15));
+                                await db.SaveChangesAsync(stoppingToken);
+                            }
+                    }
+            }
             catch(Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
-                Console.WriteLine(ex);
+                _logger.LogInformation(ex,"Unhandled exception in CheckerService execution loop.");
             }
 
             await Task.Delay(1000, stoppingToken);

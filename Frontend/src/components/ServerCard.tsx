@@ -15,7 +15,7 @@ import {
 interface Props {
   server: Server;
   onDelete: (id: number) => void;
-  onPing: (id: number) => Promise<void>;
+  onPing: (id: number) => Promise<unknown>;
   onUpdateInterval?: (id: number, newInterval: number) => Promise<void>;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
@@ -105,8 +105,9 @@ function getDisplayName(server: Server): string {
 
 const Thumb: React.FC<{ host: string; label: string }> = ({ host, label }) => {
   const favDomain = getFaviconDomain(host);
+  const encodedDomain = encodeURIComponent(favDomain);
   const [imgSrc, setImgSrc] = useState(
-    `https://www.google.com/s2/favicons?domain=${favDomain}&sz=64`
+    `https://www.google.com/s2/favicons?domain=${encodedDomain}&sz=64`
   );
   const [hasError, setHasError] = useState(false);
 
@@ -115,7 +116,7 @@ const Thumb: React.FC<{ host: string; label: string }> = ({ host, label }) => {
 
   const handleError = () => {
     if (!imgSrc.includes('duckduckgo')) {
-      setImgSrc(`https://icons.duckduckgo.com/ip3/${favDomain}.ico`);
+      setImgSrc(`https://icons.duckduckgo.com/ip3/${encodedDomain}.ico`);
     } else {
       setHasError(true);
     }
