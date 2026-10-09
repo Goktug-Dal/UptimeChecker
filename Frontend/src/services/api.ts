@@ -1,6 +1,6 @@
 import type { CreateServerDto, Server, PingResult } from '../types/monitor';
 
-const BASE_URL = 'http://localhost:5119';
+const BASE_URL = import.meta.env.VITE_API_URL?.replace(/\/+$/, '') || 'http://localhost:5119';
 
 export const getSessionId = (): string => {
   let sid = sessionStorage.getItem('uptime_session_id');

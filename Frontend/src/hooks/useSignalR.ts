@@ -3,7 +3,8 @@ import * as signalR from '@microsoft/signalr';
 import type { ServerStatusUpdatedEvent } from '../types/monitor';
 import { getSessionId } from '../services/api';
 
-const HUB_URL = 'http://localhost:5119/hubs/server-status';
+const API_URL = import.meta.env.VITE_API_URL?.replace(/\/+$/, '') || 'http://localhost:5119';
+const HUB_URL = `${API_URL}/hubs/server-status`;
 
 export const useSignalR = (onStatusUpdate: (event: ServerStatusUpdatedEvent) => void) => {
   const handlerRef = useRef(onStatusUpdate);
@@ -16,6 +17,8 @@ export const useSignalR = (onStatusUpdate: (event: ServerStatusUpdatedEvent) => 
     const connection = new signalR.HubConnectionBuilder()
       .withUrl(HUB_URL, {
         withCredentials: true,
+        skipNegotiation: false,
+        transport: signalR.HttpTransportType.WebSockets | signalR.HttpTransportType.LongPolling,
       })
       .withAutomaticReconnect([0, 2000, 5000, 10000])
       .configureLogging(signalR.LogLevel.None)
