@@ -4,7 +4,7 @@ import { fetchServers, createServer, deleteServer, triggerManualPing, updateServ
 import { useSignalR } from './hooks/useSignalR';
 import { ServerCard } from './components/ServerCard';
 import {
-  Activity,
+  //Activity,
   Plus,
   Info,
   Layers,
