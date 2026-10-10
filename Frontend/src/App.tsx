@@ -4,7 +4,6 @@ import { fetchServers, createServer, deleteServer, triggerManualPing, updateServ
 import { useSignalR } from './hooks/useSignalR';
 import { ServerCard } from './components/ServerCard';
 import {
-  //Activity,
   Plus,
   Info,
   Layers,
@@ -59,6 +58,7 @@ const LinkedinIcon: React.FC<{ size?: number }> = ({ size = 15 }) => (
 export default function App() {
   const [servers, setServers] = useState<Server[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [countdownSeconds, setCountdownSeconds] = useState(60);
 
   // Page Routing State ('monitors' | 'how' | 'about')
   const [currentPage, setCurrentPage] = useState<'monitors' | 'how' | 'about'>('monitors');
@@ -78,40 +78,32 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isPingingAll, setIsPingingAll] = useState(false);
 
-  const loadData = async () => {
+  const applyServerOrder = (rawList: Server[]): Server[] => {
+    const list = rawList.map((s) => ({
+      ...s,
+      pingLogs: (s.pingLogs || []).slice(0, 15),
+    }));
     try {
-      const rawData = await fetchServers();
-      // Ensure only the latest 15 pings are retained in state, even if backend returns 50
-      const data = rawData.map((s) => ({
-        ...s,
-        pingLogs: (s.pingLogs || []).slice(0, 15),
-      }));
-      try {
-        const savedOrder = localStorage.getItem('uptime_checker_order');
-        if (savedOrder) {
-          const orderIds = JSON.parse(savedOrder);
-          if (Array.isArray(orderIds)) {
-            data.sort((a, b) => {
-              const idxA = orderIds.indexOf(a.id);
-              const idxB = orderIds.indexOf(b.id);
-              if (idxA === -1 && idxB === -1) return 0;
-              if (idxA === -1) return 1;
-              if (idxB === -1) return -1;
-              return idxA - idxB;
-            });
-          }
+      const savedOrder = localStorage.getItem('uptime_checker_order');
+      if (savedOrder) {
+        const orderIds = JSON.parse(savedOrder);
+        if (Array.isArray(orderIds)) {
+          list.sort((a, b) => {
+            const idxA = orderIds.indexOf(a.id);
+            const idxB = orderIds.indexOf(b.id);
+            if (idxA === -1 && idxB === -1) return 0;
+            if (idxA === -1) return 1;
+            if (idxB === -1) return -1;
+            return idxA - idxB;
+          });
         }
-      } catch {}
-      setServers(data);
-    } catch (err) {
-      console.error('Error fetching servers:', err);
-    } finally {
-      setIsLoading(false);
-    }
+      }
+    } catch {}
+    return list;
   };
 
+  // Initial loader with silent auto-retry every 4 seconds until Render boots up
   useEffect(() => {
-    // Set document title and favicon
     document.title = 'Uptime Checker';
     let link: HTMLLinkElement | null = document.querySelector("link[rel*='icon']");
     if (!link) {
@@ -121,8 +113,52 @@ export default function App() {
     }
     link.href = UPTIME_LOGO;
 
-    loadData();
+    let isDone = false;
+
+    const tryFetch = async () => {
+      try {
+        const data = await fetchServers();
+        if (!isDone && Array.isArray(data)) {
+          isDone = true;
+          setServers(applyServerOrder(data));
+          setIsLoading(false);
+        }
+      } catch {
+        // Render server is still booting up (502/503/timeout), keep polling silently
+      }
+    };
+
+    // Immediate first attempt
+    tryFetch();
+
+    // Auto-poll every 4s while waiting for Render container to start
+    const pollInterval = setInterval(() => {
+      if (!isDone) {
+        tryFetch();
+      }
+    }, 4000);
+
+    return () => {
+      isDone = true;
+      clearInterval(pollInterval);
+    };
   }, []);
+
+  // Continuous 60-second countdown timer that seamlessly loops if server needs another minute
+  useEffect(() => {
+    if (!isLoading) return;
+
+    const timer = setInterval(() => {
+      setCountdownSeconds((prev) => {
+        if (prev <= 1) {
+          return 60; // Seamlessly reset to 60s for next attempt
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isLoading]);
 
 
 
@@ -538,9 +574,21 @@ export default function App() {
 
               {/* Monitors Grid with Drag & Drop */}
               {isLoading ? (
-                <div className="monitors-loading">
-                  <div className="loading-card" />
-                  <div className="loading-card" />
+                <div className="cold-start-banner" role="status" aria-live="polite">
+                  <div className="cold-start-spinner">
+                    <RefreshCw size={22} className="spin" />
+                  </div>
+                  <div className="cold-start-content">
+                    <div className="cold-start-title">
+                      Waking up backend service...
+                      <span className="cold-start-timer">
+                        (~{countdownSeconds}s remaining)
+                      </span>
+                    </div>
+                    <p className="cold-start-desc">
+                      Hosted on <strong>Render free tier</strong>. The server enters sleep mode when inactive and takes about 60 seconds to spin back up. Please wait while the container boots up.
+                    </p>
+                  </div>
                 </div>
               ) : servers.length === 0 ? (
                 <div className="empty-box">

@@ -1504,3 +1504,82 @@ a {
   color: var(--slate-700);
   font-weight: 700;
 }
+
+/* Cold-start / Render sleep notice banner */
+.cold-start-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  background: #ffffff;
+  border: 1px solid var(--slate-200);
+  border-left: 4px solid var(--blue-600);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+  animation: fadeIn 0.2s ease-in;
+}
+
+.cold-start-banner--error {
+  border-left-color: var(--red-600);
+  background: var(--red-50);
+}
+
+.cold-start-spinner {
+  color: var(--blue-600);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.cold-start-content {
+  flex: 1;
+}
+
+.cold-start-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--slate-900);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cold-start-timer {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--blue-600);
+  font-family: var(--font-mono);
+}
+
+.cold-start-desc {
+  font-size: 13px;
+  color: var(--slate-600);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.cold-start-desc strong {
+  color: var(--slate-800);
+  font-weight: 600;
+}
+
+.retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 14px;
+  background: var(--slate-900);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.retry-btn:hover {
+  background: var(--slate-800);
+}
